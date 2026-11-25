@@ -1,4 +1,4 @@
-# 🌙 合盖不休眠
+# 🌙 合盖不休眠（v1.7.0 纯 Swift 重写版）
 
 <p align="center">
   <img src="Resources/AppIcon.jpg" width="128" height="128" alt="合盖不休眠图标">
@@ -10,9 +10,28 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%20(Universal)-blue" alt="platform">
-  <img src="https://img.shields.io/badge/version-v1.7.0-green" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.7.0--prerelease-green" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-orange" alt="license">
 </p>
+
+> 💡 **关于本仓库与上游关系**
+>
+> 本仓库基于原项目 [1073020318-cell/nosleep-mac](https://github.com/1073020318-cell/nosleep-mac)（MIT 协议）进行重构与增强，**全部代码改动已通过 [PR #1](https://github.com/1073020318-cell/nosleep-mac/pull/1) 提交给上游原作者等待合并**。
+>
+> 如果你想在上游合并发布之前提前体验 `v1.7.0`（纯 Swift 原生重写、收紧免密权限、低电量保护、重启自动恢复等），可以直接前往本仓库的 **[Releases](https://github.com/H4Ha/nosleep-mac/releases)** 下载预编译的通用版 DMG 安装包。官方正式版请仍以原仓库为准。
+
+---
+
+## 🛠️ 为什么做这个版本（相对原版 v1.6.0 的核心改进）
+
+日常重度使用原版的过程中遇到了一些安全、耗电和稳定性痛点，于是把全部逻辑重新整理并合并为单文件纯 Swift 原生应用（`Sources/menulet.swift`），不再依赖 bash 轮询脚本和 Python：
+
+- **收紧免密安全权限**：旧版免密规则允许本机**任意账户**免密执行 `pmset` 全部命令；现改为按账户隔离（`/etc/sudoers.d/nosleep-<uid>`），仅允许当前账户免密执行 `pmset -a disablesleep 0` / `1`，写入前经 `visudo -cf` 校验，卸载时通过系统授权真正清理干净，且不再往 `/tmp` 写可执行脚本。
+- **显著降低后台耗电**：用 IOKit 订阅 `IOPMrootDomain` 合盖事件替代每 0.1 秒启动 5 个子进程的 bash 循环，空闲 CPU 占用从约 18% 降至接近 0。
+- **去掉 Python 依赖 & 修复开盖黑屏**：进程内直接调用 DisplayServices 控制背光（未装 Xcode Command Line Tools 的 Mac 合盖也能可靠熄屏）；合盖状态下定时到期时，先恢复亮度再休眠，避免开盖黑屏。
+- **不破坏系统原有睡眠设置**：仅切换 `disablesleep` 并持有 `PreventUserIdleSystemSleep` 断言，不再覆盖你自己的显示器/硬盘睡眠时间。
+- **系统重启 / 注销 / 升级后自动恢复**：遇到 macOS 自动更新重启、注销或升级替换旧版时，退出前先安全恢复正常休眠，下次登录自启后自动恢复之前的开启状态（开机初期最多重试 3 次，尊重定时过期与低电量保护，失败必发通知；手动关闭/手动退出/外部关闭则清除恢复标记）。
+- **低电量保护与完整沙箱测试**：新增电池低电量自动关闭（10% / 20% / 30% 可选），并配套 **36 个场景 / 81 项检查** 的离线沙箱测试套件（`./scripts/test.sh`）。
 
 ---
 
@@ -20,9 +39,10 @@
 
 - 🌙 **合盖不休眠** — 合上屏幕后电脑继续运行，屏幕自动关闭省电
 - ⚡ **开盖秒亮** — 打开屏幕瞬间恢复，无需等待
-- ⏱ **定时关闭** — 支持 30分钟/1h/2h/4h/8h 定时自动关闭，倒计时精确到秒；关闭状态下选定时会直接开启
-- 🔋 **低电量保护** — 用电池时电量降到 10%/20%/30%（可选）自动关闭，防止合盖放包里把电耗光
-- 🚀 **开机自动启动** — 菜单里一键开关（macOS 13+）
+- 🔄 **重启自动接续** — 系统更新重启或升级替换后自动恢复开启，不再静默失效
+- ⏱ **定时关闭** — 支持 30分钟/1h/2h/4h/8h 定时自动关闭，倒计时精确到秒；关闭状态下选定时会直接开启，重启后未到期继续计时
+- 🔋 **低电量保护** — 用电池时电量降到 10%/20%/30%（默认 20%）自动关闭，防止合盖放包里把电耗光
+- 🚀 **开机自动启动** — 菜单里一键开关（macOS 13+，SMAppService）
 - 🔧 **菜单栏常驻** — 不占 Dock 位置，一键开/关
 - 🪶 **几乎不耗电** — 合盖监听用系统事件，空闲时 CPU 占用接近 0
 - 🗑 **一键卸载** — 关闭合盖不休眠、删除免密配置、删除 App 自己的日志和设置，再把 App 移到废纸篓
@@ -32,56 +52,56 @@
 MacBook 合上屏幕后会自动休眠，导致：
 
 - ❌ 下载任务中断
-- ❌ AI 助手掉线
-- ❌ 远程连接断开
-- ❌ 后台编译/渲染停止
+- ❌ AI 助手 / 本地代理掉线
+- ❌ SSH 远程连接断开
+- ❌ 后台编译 / 渲染 / 自动化任务停止
 
 **合盖不休眠** 让你合盖走人，电脑继续干活，屏幕关掉省电。
 
-## 📋 安装
+## 📋 安装与提前试用
 
-### 方式一：下载安装包（推荐）
+### 方式一：直接下载本仓库 Release（推荐，抢先体验 v1.7.0）
 
-1. 前往 [Releases](../../releases) 下载最新 DMG 文件
+1. 前往本仓库 **[Releases](https://github.com/H4Ha/nosleep-mac/releases)** 下载最新版 `nosleep-mac_v1.7.0.dmg`（Apple Silicon + Intel 通用）
 2. 双击打开 DMG
-3. 将「合盖不休眠」拖入「Applications」文件夹
+3. 将「合盖不休眠」拖入「Applications（应用程序）」文件夹
 4. 从启动台打开
 
-### 从旧版升级
+### 从旧版（v1.6 及以下）升级
 
 1. **先退出旧版**：点菜单栏 🌙 → 「退出」（旧版退出时会恢复正常休眠）
 2. 用新版替换「应用程序」里的「合盖不休眠」，再打开
-3. 新版会提示「升级免密配置」，点「升级」并输入一次密码
+3. 新版会提示「升级免密配置」，点「升级」并输入一次管理员密码
 
-如果打开新版后菜单栏没有变化，说明旧版还在运行：先在旧版菜单里点「退出」，再打开新版。
+如果打开新版时旧版仍在运行，新版会弹窗提示「改用这个版本」协助平滑接管；若旧版长时间未退出，请先在旧版菜单点「退出」再重开新版。
 
 ### 方式二：从源码构建
 
 ```bash
-# 克隆仓库
-git clone https://github.com/1073020318-cell/nosleep-mac.git
+# 克隆本仓库
+git clone https://github.com/H4Ha/nosleep-mac.git
 cd nosleep-mac
 
-# 构建 App
+# 构建 App（Universal Binary: arm64 + x86_64）
 ./scripts/build.sh
 
 # 或构建 DMG 安装包
 ./scripts/build.sh dmg
 
-# 运行沙箱场景测试（模拟合盖、定时、低电量等 23 个场景，不改动电脑设置）
+# 运行沙箱场景测试（模拟合盖、定时、低电量、重启恢复等 36 个场景 / 81 项检查，不改动本机设置）
 ./scripts/test.sh
 ```
 
 ### ⚠️ 首次打开
 
-App 没有苹果开发者签名，macOS 会拦截：
+App 使用 ad-hoc 本地签名（无苹果付费开发者证书），首次打开会被 macOS Gatekeeper 拦截：
 - **macOS 15 及以后**：双击后点「完成」，再到「系统设置 → 隐私与安全性」，在页面底部点「仍要打开」
 - **macOS 14 及以前**：右键点击 App → 选择「打开」→ 点击「打开」确认
 - 或者在终端执行：`xattr -cr /Applications/合盖不休眠.app`
 
 第一次点「开启」时需要输入一次管理员密码（配置免密权限），之后不再需要。
 
-> 💡 退出 App 会同时关闭合盖不休眠。如果 App 被强制结束，系统会一直保持「不休眠」，重新打开 App 即可接管或关闭（建议开启「开机自动启动」）。
+> 💡 手动点「退出」会同时关闭合盖不休眠且下次重开保持关闭；如果是系统重启 / 注销导致的非手动退出，且已开启「开机自动启动」，下次登录后会自动恢复开启状态（定时已过期或低电量时除外）。
 
 ## 🎮 使用方法
 
@@ -94,21 +114,25 @@ App 没有苹果开发者签名，macOS 会拦截：
 | 「关闭合盖不休眠」 | 关闭功能，恢复正常休眠 |
 | 「定时关闭」 | 设置定时自动关闭（关闭状态下选择会同时开启） |
 | 「低电量保护」 | 选择电量低于多少时自动关闭，或不启用 |
-| 「开机自动启动」 | 登录后自动出现在菜单栏 |
+| 「开机自动启动」 | 登录后自动出现在菜单栏（配合重启自动恢复效果最佳） |
+| 「关于 → 查看日志」 | 打开 `~/Library/Logs/合盖不休眠.log` 排查问题 |
 | 「卸载并退出」 | 关闭功能、删除免密配置和 App 自己的文件，并把 App 移到废纸篓 |
 
 ## 🏗️ 项目结构
 
-```
+```text
 nosleep-mac/
 ├── Sources/
-│   └── menulet.swift     # 全部代码（Swift 菜单栏应用）
+│   └── menulet.swift     # 全部代码（纯 Swift 原生菜单栏应用）
 ├── Resources/
 │   ├── AppIcon.jpg       # 图标源文件
 │   ├── Info.plist        # App 配置
 │   └── 使用说明.txt       # 用户说明
 ├── scripts/
-│   └── build.sh          # 构建脚本
+│   ├── build.sh          # Universal Binary 构建与 DMG 打包脚本
+│   └── test.sh           # 沙箱场景测试入口（36 场景 / 81 项检查）
+├── tests/
+│   └── sim/              # 系统层假实现与场景测试源码
 ├── README.md
 └── LICENSE
 ```
@@ -120,13 +144,13 @@ nosleep-mac/
 | 菜单栏 | Swift + Cocoa | NSStatusItem 菜单栏应用，LSUIElement 模式 |
 | 合盖监听 | IOKit | 订阅 IOPMrootDomain 的合盖事件（另有 1 秒一次的进程内兜底检查），不启动任何子进程 |
 | 背光控制 | DisplayServices | 进程内直接调用私有框架控制内建屏幕亮度，不需要 Python |
-| 休眠控制 | pmset | 只切换 `disablesleep`，不改你自己设置的显示器/硬盘睡眠时间 |
+| 休眠控制 | pmset + IOPMAssertion | 仅切换 `disablesleep` 并持有 `PreventUserIdleSystemSleep` 断言，不改你的显示器/硬盘睡眠时间 |
 | 低电量保护 | IOKit.ps | 电源变化时系统回调，不轮询 |
 
 ### 安全说明
 
 - `/etc/sudoers.d/nosleep-<你的用户ID>` 只允许**你的账户**免密执行两条固定命令：`pmset -a disablesleep 0` 和 `pmset -a disablesleep 1`；每个账户一个文件，互不覆盖
-- 写入前用 `visudo` 校验，校验不通过不会替换，避免把 sudo 配置写坏
+- 写入前用 `visudo -cf` 校验，校验不通过不会替换，避免写坏 sudo 配置
 - 从旧版升级时会提示收紧旧的「所有账户可执行任意 pmset」配置
 - 无任何网络通信，无数据外传
 - 不在 `/tmp/` 放任何脚本；日志在 `~/Library/Logs/合盖不休眠.log`
@@ -140,9 +164,9 @@ nosleep-mac/
 | 芯片 | Apple Silicon（M1/M2/M3/M4）✅ / Intel Mac ✅ |
 | 权限 | 首次运行需管理员密码 |
 
-> ✅ v1.5+ 已编译为 Universal Binary，同时支持 Apple Silicon 和 Intel Mac。
-
-> ⚠️ **不支持 macOS 10.15 (Catalina) 及更低版本**。App 用到了 macOS 11 才有的系统功能（如菜单栏图标用的 SF Symbols），构建时也以 macOS 11 为最低版本。
+> ✅ 已编译为 Universal Binary，同时支持 Apple Silicon 和 Intel Mac。
+>
+> ⚠️ **不支持 macOS 10.15 (Catalina) 及更低版本**（使用了 macOS 11+ 的系统特性如 SF Symbols，构建目标为 macOS 11.0）。
 
 ## 📜 开源协议
 
@@ -150,11 +174,11 @@ nosleep-mac/
 
 ## 🙏 致谢
 
-因个人需求开发，从 v1 到 v15 迭代了十几轮。希望对有同样需求的 Mac 用户有帮助！
+衷心感谢原作者 **[1073020318-cell](https://github.com/1073020318-cell/nosleep-mac)** 构思并开源了 `nosleep-mac`（从最初版本一路迭代到 v1.6.0，解决了无数 Mac 用户的痛点）。
+
+本仓库在原项目基础上完成了纯 Swift 原生重写、权限收紧、低电量保护与重启自动恢复等改进，并已将完整改动通过 **[PR #1](https://github.com/1073020318-cell/nosleep-mac/pull/1)** 回馈给上游仓库。欢迎持续关注原仓库的官方更新！
 
 ## ❓ 常见问题与排错
-
-### 基础问题
 
 **Q: 提示"无法验证开发者"或"已损坏"？**
 > 这是 macOS Gatekeeper 安全机制，因为 App 使用 ad-hoc 签名。解决方法：
@@ -162,56 +186,15 @@ nosleep-mac/
 > 2. 或在终端执行：`xattr -cr /Applications/合盖不休眠.app`
 
 **Q: 需要安装 Python 吗？**
-> v1.7 起不需要。旧版依赖 Python 3，在没装开发者工具的 Mac 上合盖后屏幕可能不灭，升级即可。
+> v1.7.0 起不需要。旧版依赖 Python 3，在没装开发者工具的 Mac 上合盖后屏幕可能不灭，升级即可。
 
-**Q: Intel Mac 能用吗？**
-> ✅ v1.5+ 已编译为 Universal Binary，同时支持 Apple Silicon 和 Intel Mac。
-
-**Q: 为什么最低要求 macOS 11.0？**
-> App 用到了 macOS 11 才有的系统功能。2020 年后购买的 Mac 基本都符合要求。
-
-### 排错指南
-
-**Q: 双击 App 没有任何反应？**
-
-> 请按以下步骤排查：
->
-> **步骤1**：在终端执行 `xattr -cr /Applications/合盖不休眠.app`，然后再打开
->
-> **步骤2**：如果仍然没反应，在终端手动启动查看报错：
-> ```bash
-> /Applications/合盖不休眠.app/Contents/MacOS/menulet
-> ```
-> 把终端显示的错误信息截图反馈。
->
-> **步骤3**：查看日志文件 `~/Library/Logs/合盖不休眠.log`（菜单 → 关于 → 查看日志）
-
-**Q: 输入密码后还是没反应？**
-> 可能密码输入错误，或当前用户不是管理员账户。配置免密需要管理员账户的密码。
-
-**Q: 关闭后电脑不再自动关显示器了？**
-> 旧版（v1.6 及以前）开启时会把显示器/系统/硬盘睡眠时间都改成「永不」，关闭时又统一改成 1/10/10 分钟（用电池时也是 10 分钟关显示器）。v1.7 不再改这些时间。升级免密配置时如果检测到旧版留下的设置，会提供一个「恢复为 macOS 默认值」的勾选项；也可以在「系统设置 → 电池 / 锁定屏幕」里自己调整。
-
-**Q: v1.7 和旧版用起来有什么不同？**
-> - 开盖使用时，显示器按你自己在系统设置里的时间自动关闭（旧版开启期间显示器永不关闭）
-> - 开启/关闭不再弹通知，看菜单栏图标即可（定时到、低电量自动关闭仍会通知）
-> - 管理员密码在第一次点「开启」时才需要输入，而不是一打开 App 就要
-> - 「退出」会同时关闭合盖不休眠；如果在终端里用 `pmset` 开启了 disablesleep，App 也会接管并在退出时关闭
-
-**Q: 菜单栏图标不出现？**
-> menulet 可能启动后崩溃了。在终端手动启动查看具体错误：
-> ```bash
-> /Applications/合盖不休眠.app/Contents/MacOS/menulet
-> ```
-> 如果提示 `Library not loaded` 或 `libswiftCore` 相关错误，说明 Swift 运行时版本不兼容，请更新 macOS 到最新版本。
-
-**Q: 如何反馈问题？**
-> 1. 查看 `~/Library/Logs/合盖不休眠.log` 日志
-> 2. 在终端执行 `menulet` 的输出截图
-> 3. 到 [GitHub Issues](../../issues) 提交问题
+**Q: 遇到问题如何反馈？**
+> 1. 打开菜单栏 🌙 →「关于」→「查看日志」（`~/Library/Logs/合盖不休眠.log`）
+> 2. 若双击无反应，可在终端运行 `/Applications/合盖不休眠.app/Contents/MacOS/menulet` 查看输出
+> 3. 到本仓库 [GitHub Issues](https://github.com/H4Ha/nosleep-mac/issues) 提交问题并附上日志
 
 ---
 
 <p align="center">
-  觉得有用？给个 ⭐ Star 吧！
+  如果这个改进版帮到了你，欢迎给原仓库和本仓库都点个 ⭐ Star！
 </p>
